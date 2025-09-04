@@ -1,0 +1,43 @@
+{
+  "seedHex": "b8da24600e04b1be785d06e9a3a6bb6853361d3481e5bd93aee26825ef519789",
+  "seedString": "H-DET-001|1723654321123|1,0,0,2|verify|calligraphic|v12",
+  "params": {
+    "rings": 6,
+    "turns": 7,
+    "raysLevel": 0,
+    "paletteHue": 186,
+    "pointsDensity": 295,
+    "lineScale": 1.2122209867928178
+  },
+  "inputs": {
+    "huid": "H-DET-001",
+    "ts": "1723654321123",
+    "P": 1,
+    "I": 0,
+    "E": 0,
+    "C": 2,
+    "context": "verify",
+    "style": "calligraphic",
+    "palette": "gold"
+  },
+  "layers": {
+    "dots": {
+      "count": 196,
+      "opacityRange": [
+        0.45,
+        0.6
+      ]
+    },
+    "wave": {
+      "turns": 7,
+      "thicknessEstimate": 1.4
+    },
+    "emblem": {
+      "style": "calligraphic"
+    },
+    "core": {
+      "rings": 6
+    }
+  },
+  "hashHex": "3fe6efdd6a5a4496cbb6935a8570e6afb3df0bd4b468da3320b14818af2b3875"
+}

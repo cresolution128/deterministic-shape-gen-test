@@ -1,0 +1,43 @@
+{
+  "seedHex": "6590f9bb5a0d769f27a95969ba3bfb25b0280b23c7a0e04a494f362242456ace",
+  "seedString": "H-DET-001|1723654321123|1,2,1,4|verify|geometric|v12",
+  "params": {
+    "rings": 8,
+    "turns": 4,
+    "raysLevel": 53,
+    "paletteHue": 83,
+    "pointsDensity": 271,
+    "lineScale": 1.4422034378629178
+  },
+  "inputs": {
+    "huid": "H-DET-001",
+    "ts": "1723654321123",
+    "P": 1,
+    "I": 2,
+    "E": 1,
+    "C": 4,
+    "context": "verify",
+    "style": "geometric",
+    "palette": "gold"
+  },
+  "layers": {
+    "dots": {
+      "count": 180,
+      "opacityRange": [
+        0.45,
+        0.6
+      ]
+    },
+    "wave": {
+      "turns": 4,
+      "thicknessEstimate": 1.4
+    },
+    "emblem": {
+      "style": "geometric"
+    },
+    "core": {
+      "rings": 8
+    }
+  },
+  "hashHex": "0a793b3e2ae9b5e23b7b1d84b01165f50cebfc1ca2c3ec66276bb1a208e4c1d2"
+}

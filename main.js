@@ -341,6 +341,11 @@ el('exportPNG2k').addEventListener('click', async ()=> {
   const blob = await svgToPng(window._last.svg,1024);
   if (blob) download('glyph-1024.png', blob, 'image/png'); else alert('PNG export failed');
 });
+el('exportJSON').addEventListener('click', ()=> {
+  if (!window._last) return alert('Generate first');
+  const jsonStr = JSON.stringify(window._last.jsonOut, null, 2);
+  download('glyph.json', jsonStr, 'application/json');
+});
 
 /* -------------------- Tests T1 / T2 -------------------- */
 el('runT1').addEventListener('click', async ()=>{
