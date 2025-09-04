@@ -1,64 +1,111 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>Seed-Based Shape Generator</title>
-  <style>
-    body { background:#111; color:#eee; font-family:sans-serif; text-align:center; }
-    #out svg { width:400px; height:400px; margin-top:20px; }
-    input { padding:6px 10px; font-size:16px; border-radius:6px; border:none; }
-  </style>
+<meta charset="utf-8" />
+<title>Step2 — Deterministic Glyph Micro-Demo</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;background:#0b0f14;color:#e8eef6;margin:12px}
+  .wrap{max-width:980px;margin:0 auto;display:grid;grid-template-columns:360px 1fr;gap:12px}
+  .card{background:#0f1722;padding:12px;border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.6);box-sizing:border-box;}
+  label{display:block;font-size:12px;color:#9fb0c8;margin-top:8px}
+  input,select{width:100%;max-width:100%;padding:8px;border-radius:6px;border:1px solid #223344;background:#071019;color:#eef;box-sizing:border-box;overflow:hidden;text-overflow:ellipsis;}
+  button{margin-top:10px;padding:8px 10px;border-radius:6px;border:none;background:#2b9bd6;color:#04202d;cursor:pointer}
+  #preview svg{width:320px;height:320px;border-radius:6px;background:#081018;display:block;margin:0 auto}
+  small{color:#99b2c9}
+  pre{white-space:pre-wrap;word-break:break-word;background:#071018;padding:8px;border-radius:6px;color:#bfe}
+  .row{display:flex;gap:8px}
+  .muted{color:#96adc6;font-size:12px}
+  input[type=range]{width:100%;margin:0;height:2.2em;padding:0;background:transparent;box-sizing:border-box;}
+</style>
 </head>
 <body>
-  <h2>Deterministic Shape Generator</h2>
-  <input id="seedInput" value="HUID|timestamp|organica|v12" />
-  <div id="out"></div>
+  <h2>Step 2 — Deterministic Glyph Micro-Demo</h2>
+  <div class="wrap">
+    <div class="card">
+      <div><small>Inputs (seed string will be SHA-256("HUID|ts|P,I,E,C|context|style|v12"))</small></div>
+      <label>HUID <input id="huid" value="H-DET-001"/></label>
+      <label>ts (timestamp) <input id="ts" value="1723654321123"/></label>
+      <div style="margin-top:8px;">
+        <div style="font-size:12px;color:#9fb0c8;margin-bottom:2px;">Energies</div>
+        <label style="display:flex;align-items:center;gap:8px;margin-top:8px;">
+          <span style="width:18px;">P</span>
+          <input id="P" type="range" min="0" max="5" value="1" step="1" style="flex:1;" oninput="document.getElementById('P_val').textContent=this.value">
+          <span id="P_val" style="min-width:16px;display:inline-block;text-align:right;">1</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;margin-top:8px;">
+          <span style="width:18px;">I</span>
+          <input id="I" type="range" min="0" max="5" value="0" step="1" style="flex:1;" oninput="document.getElementById('I_val').textContent=this.value">
+          <span id="I_val" style="min-width:16px;display:inline-block;text-align:right;">0</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;margin-top:8px;">
+          <span style="width:18px;">E</span>
+          <input id="E" type="range" min="0" max="5" value="0" step="1" style="flex:1;" oninput="document.getElementById('E_val').textContent=this.value">
+          <span id="E_val" style="min-width:16px;display:inline-block;text-align:right;">0</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;margin-top:8px;">
+          <span style="width:18px;">C</span>
+          <input id="C" type="range" min="0" max="5" value="2" step="1" style="flex:1;" oninput="document.getElementById('C_val').textContent=this.value">
+          <span id="C_val" style="min-width:16px;display:inline-block;text-align:right;">2</span>
+        </label>
+      </div>
+      <label>Context
+        <select id="context">
+          <option>verify</option><option>registration</option><option>payment_confirm</option>
+          <option>contribution</option><option>access_grant</option><option>tx</option><option>other</option>
+        </select>
+      </label>
+      <label>Style
+        <select id="style">
+          <option value="organica">organica</option>
+          <option value="geometric">geometric</option>
+          <option value="calligraphic" selected>calligraphic</option>
+        </select>
+      </label>
+      <label>Palette
+        <select id="palette">
+          <option value="gold">Gold</option>
+          <option value="red">Red</option>
+          <option value="indigo">Indigo</option>
+          <option value="copper">Copper</option>
+          <option value="olo">Olo</option>
+        </select>
+      </label>
 
-  <script>
-  function fnv1a(s){let h=0x811c9dc5;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=(h>>>0)*0x01000193>>>0;}return h>>>0;}
-  
-  function generate(seedStr){
-    let s = fnv1a(seedStr) || 1;
-    function xorshift(){ s^=s<<13; s^=s>>>17; s^=s<<5; return (s>>>0); }
-    const rnd = (min=0,max=1)=> min + (xorshift()/0xFFFFFFFF)*(max-min);
-  
-    const W=512,H=512,cx=W/2,cy=H/2, R=rnd(120,220);
-    const petals = Math.floor(rnd(5,9));
-    const turns  = rnd(1.5,3.5);
-    const jitter = rnd(0.6,1.6);
-    const steps  = 480;
-  
-    let d = "";
-    for (let i=0;i<=steps;i++){
-      const t = i/steps;
-      const a = t*turns*2*Math.PI;
-      const r = (t**0.9)*R*(0.65+0.35*Math.sin(petals*a));
-      const j = 1 + (jitter-1)*Math.sin(a*2 + rnd(0,6.28));
-      const x = cx + r*j*Math.cos(a), y = cy + r*j*Math.sin(a);
-      d += (i===0?`M${x.toFixed(2)},${y.toFixed(2)}`:`L${x.toFixed(2)},${y.toFixed(2)}`);
-    }
-  
-    let dots = "";
-    for (let i=0;i<36;i++){
-      const a = i/36*2*Math.PI, rr = rnd(40, R-20);
-      const x = cx + rr*Math.cos(a), y = cy + rr*Math.sin(a);
-      const rad = rnd(2,6), g = Math.floor(rnd(140,220));
-      dots += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${rad.toFixed(1)}" fill="rgb(${g},${g},${g})"/>`;
-    }
-  
-    const stroke = `hsl(${Math.floor(rnd(0,360))} 70% 45%)`;
-    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}">
-      <rect width="100%" height="100%" fill="#0b0f14"/>
-      ${dots}
-      <path d="${d}" fill="none" stroke="${stroke}" stroke-width="3" stroke-linecap="round"/>
-    </svg>`;
-  }
-  
-  const input = document.getElementById("seedInput");
-  const out = document.getElementById("out");
-  function update(){ out.innerHTML = generate(input.value); }
-  input.addEventListener("input", update);
-  update();
-  </script>
+      <div style="margin-top:8px" class="row">
+        <button id="gen">Generate</button>
+        <button id="exportSvg">Export SVG</button>
+        <button id="exportPNG">Export PNG 512</button>
+        <button id="exportPNG2k">Export PNG 1024</button>
+      </div>
+
+      <div style="margin-top:8px">
+        <button id="runT1">Run T1 (Determinism)</button>
+        <div class="muted" style="margin-bottom:2px;font-size:13px;padding:5px;">(Checks if running 3x with same inputs gives identical results (hashes).)</div>
+        <button id="runT2">Run T2 (Uniqueness N=200)</button>
+        <div class="muted" style="font-size:13px;padding:5px;">(Checks if 200 runs with different timestamps produce unique seeds (no duplicates).)</div>
+      </div>
+
+      <div style="margin-top:10px">
+        <div class="muted">seedHex:</div>
+        <pre id="seedHexOut">-</pre>
+        <div class="muted">hashHex (JSON):</div>
+        <pre id="hashHexOut">-</pre>
+      </div>
+    </div>
+
+    <div class="card">
+      <div id="preview"><svg id="svgPreview" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg"></svg></div>
+
+      <h4>Controls & Validation</h4>
+      <div class="muted">Control Seeds (TVs) validation — computes seedHex from their inputs and compares to expected</div>
+      <button id="validateTVs">Validate TV Vectors</button>
+      <pre id="tvReport">Press "Validate TV Vectors"</pre>
+      <h4>JSON (params & layers)</h4>
+      <pre id="jsonOut">-</pre>
+    </div>
+  </div>
+
+  <script src="main.js"></script>
 </body>
 </html>
