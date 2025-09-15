@@ -149,20 +149,190 @@ function deriveParams(rng, inputs){
   return { rings, turns, raysLevel, paletteHue, pointsDensity, lineScale };
 }
 
-function buildLayersSVG(rng, params, inputs){
-  const W=512,H=512,cx=W/2,cy=H/2;
-  const paletteMap = {
-    gold:   { main: 'hsl(45, 90%, 60%)', tones: ['#ffe082', '#ffd54f', '#ffb300'] },
-    red:    { main: 'hsl(0, 80%, 60%)', tones: ['#ff8a80', '#ff5252', '#d32f2f'] },
-    indigo: { main: 'hsl(245, 70%, 60%)', tones: ['#b3aaff', '#536dfe', '#1a237e'] },
-    copper: { main: 'hsl(25, 70%, 55%)', tones: ['#ffb074', '#d2691e', '#a0522d'] },
-    olo:    { main: 'hsl(160, 60%, 50%)', tones: ['#a7ffeb', '#1de9b6', '#004d40'] }
+// Reference palettes and accent
+const PALETTES = {
+  gold:   { main: '#D4AF37', light: '#FFE6A3', shade: '#8C6D1F' },
+  red:    { main: '#E14A44', light: '#FFB3AF', shade: '#8E2D28' },
+  indigo: { main: '#4B3FBF', light: '#B7B3F3', shade: '#2B2570' },
+  copper: { main: '#C8761B', light: '#F1B07A', shade: '#8A4F14' },
+  olo:    { main: '#46C1B7', light: '#AEE7E2', shade: '#2D8079' },
+  bg:     '#0F1417'
+};
+const ACCENT = '#8fb4ff';
+
+// --- sfc32 PRNG (reference) ---
+function sfc32(a, b, c, d) {
+  return function() {
+    a >>>= 0; b >>>= 0; c >>>= 0; d >>>= 0;
+    var t = (a + b) | 0;
+    a = b ^ (b >>> 9);
+    b = (c + (c << 3)) | 0;
+    c = (c << 21 | c >>> 11);
+    d = (d + 1) | 0;
+    t = (t + d) | 0;
+    c = (c + t) | 0;
+    return (t >>> 0) / 4294967296;
   };
-  const palette = paletteMap[inputs.palette] || paletteMap.gold;
-  // Blue-noise dots: dart-throwing
+}
+function makeSfc32FromSeedHex(seedHex) {
+  return sfc32(
+    parseInt(seedHex.slice(0, 8), 16),
+    parseInt(seedHex.slice(8, 16), 16),
+    parseInt(seedHex.slice(16, 24), 16),
+    parseInt(seedHex.slice(24, 32), 16)
+  );
+}
+// --- Catmull-Rom spline (reference) ---
+function catmullRomPath(pts, closed = true) {
+  const P = pts.slice();
+  if (closed) {
+    P.unshift(pts[pts.length - 1]);
+    P.push(pts[0], pts[1]);
+  }
+  let d = `M ${P[1].x.toFixed(2)} ${P[1].y.toFixed(2)}`;
+  for (let i = 1; i < P.length - 2; i++) {
+    const p0 = P[i - 1], p1 = P[i], p2 = P[i + 1], p3 = P[i + 2];
+    const c1x = p1.x + (p2.x - p0.x) / 6, c1y = p1.y + (p2.y - p0.y) / 6;
+    const c2x = p2.x - (p3.x - p1.x) / 6, c2y = p2.y - (p3.y - p1.y) / 6;
+    d += ` C ${c1x.toFixed(2)} ${c1y.toFixed(2)}, ${c2x.toFixed(2)} ${c2y.toFixed(2)}, ${p2.x.toFixed(2)} ${p2.y.toFixed(2)}`;
+  }
+  return d;
+}
+// --- Emblem shape generators (reference logic) ---
+function genOrganica({cx, cy, rnd, energies, lineScale}) {
+  const [P, I, E, C] = energies;
+  const R0 = 110 + I * 4, a1 = 0.15 + E * 0.03, a2 = 0.10 + C * 0.02;
+  const k1 = 3 + Math.floor(rnd() * 3 + P * 0.2), k2 = 5 + Math.floor(rnd() * 4 + P * 0.1);
+  const p1 = rnd() * Math.PI * 2, p2 = rnd() * Math.PI * 2, M = 96 + P * 8, pts = [];
+  for (let i = 0; i < M; i++) {
+    const th = i / M * Math.PI * 2;
+    const r = R0 * (1 + a1 * Math.sin(k1 * th + p1) + a2 * Math.sin(k2 * th + p2));
+    pts.push({ x: cx + r * Math.cos(th), y: cy + r * Math.sin(th) });
+  }
+  const coreR = 28 + ((P + I + E + C) / 4) * 3 * lineScale;
+  return { d: catmullRomPath(pts, true), core: { cx, cy, r: coreR.toFixed(2) } };
+}
+function genGeometric({cx, cy, rnd, energies, raysLevel, lineScale}) {
+  const [P, I, E, C] = energies;
+  const n = 4 + (C) * 0.12;
+  const k = 3 + Math.floor(rnd() * 3 + P * 0.2);
+  const R = 110 + I * 4;
+  const mA = 0.12 + E * 0.03;
+  const M = 2 * k * 24;
+  const rot = rnd() * Math.PI * 2;
+  let pts = [];
+  for (let i = 0; i < M; i++) {
+    const th = i / M * Math.PI * 2 + rot;
+    const base = 1 / Math.sqrt(Math.pow(Math.abs(Math.cos(th)), 2 / n) + Math.pow(Math.abs(Math.sin(th)), 2 / n));
+    const mod = 1 + mA * Math.cos(k * th);
+    pts.push({ x: cx + R * base * mod * Math.cos(th), y: cy + R * base * mod * Math.sin(th) });
+  }
+  // Rays
+  let rays = null;
+  if (raysLevel > 0) {
+    const count = Math.max(1, Math.round((24 + 6 * C) * (Math.max(0, Math.min(100, raysLevel)) / 100)));
+    const step = Math.PI * 2 / count, items = [];
+    for (let i = 0; i < count; i++) {
+      const a = i * step + rot * 0.5;
+      const w = 0.3 + (3.5 - 0.3) * ((Math.sin(i * 2.399) + 1) / 2);
+      items.push({
+        x1: cx + Math.cos(a) * (R * 0.45),
+        y1: cy + Math.sin(a) * (R * 0.45),
+        x2: cx + Math.cos(a) * (R * 1.1),
+        y2: cy + Math.sin(a) * (R * 1.1),
+        w: w.toFixed(2)
+      });
+    }
+    rays = { count, items };
+  }
+  return { d: catmullRomPath(pts, true), rays };
+}
+function chaikin(pts, it = 1) {
+  let p = pts.slice();
+  for (let k = 0; k < it; k++) {
+    const out = [];
+    for (let i = 0; i < p.length - 1; i++) {
+      const A = p[i], B = p[i + 1];
+      out.push({ x: A.x * 0.75 + B.x * 0.25, y: A.y * 0.75 + B.y * 0.25 });
+      out.push({ x: A.x * 0.25 + B.x * 0.75, y: A.y * 0.25 + B.y * 0.75 });
+    }
+    p = out;
+  }
+  return p;
+}
+function genCalligraphic({cx, cy, rnd, energies, penMul, penSmooth, lineScale}) {
+  const [P, I, E, C] = energies;
+  const R0 = 105 + I * 5, a1 = 0.14 + E * 0.02, a2 = 0.10 + C * 0.02;
+  const k1 = 2 + Math.floor(rnd() * 3), k2 = 5 + Math.floor(rnd() * 3);
+  const p1 = rnd() * Math.PI * 2, p2 = rnd() * Math.PI * 2, N = 80 + P * 10, ctr = [];
+  for (let i = 0; i < N; i++) {
+    const t = i / (N - 1), th = t * Math.PI * 2;
+    const r = R0 * (1 + a1 * Math.sin(k1 * th + p1) + a2 * Math.sin(k2 * th + p2));
+    ctr.push({ x: cx + r * Math.cos(th), y: cy + r * Math.sin(th) });
+  }
+  const base = (2.0 + E * 0.8) * (penMul || 1.6) * (lineScale || 1), varA = 0.6 + C * 0.25, varK = 3 + Math.floor(rnd() * 4);
+  const left = [], right = [];
+  for (let i = 0; i < ctr.length; i++) {
+    const p = ctr[i], q = ctr[(i + 1) % ctr.length], dx = q.x - p.x, dy = q.y - p.y, len = Math.max(1e-6, Math.hypot(dx, dy));
+    const nx = -dy / len, ny = dx / len, t = i / (ctr.length - 1), w = base * (1 + varA * Math.sin(varK * t * Math.PI * 2));
+    left.push({ x: p.x + nx * w, y: p.y + ny * w });
+    right.push({ x: p.x - nx * w, y: p.y - ny * w });
+  }
+  let rib = left.concat(right.reverse());
+  if (penSmooth > 0) rib = chaikin(rib, Math.max(0, Math.min(3, penSmooth | 0)));
+  let d = `M ${rib[0].x.toFixed(2)} ${rib[0].y.toFixed(2)}`;
+  for (let i = 1; i < rib.length; i++) d += ` L ${rib[i].x.toFixed(2)} ${rib[i].y.toFixed(2)}`;
+  d += ' Z';
+  const coreR = 26 + ((P + I + E + C) / 4) * 2.5;
+  return { d, core: { cx, cy, r: coreR.toFixed(2) } };
+}
+
+function renderSpiralVarWidth({cx, cy, rnd, energies, intensity}) {
+  const [P, I, E, C] = energies;
+  const TAU = Math.PI * 2;
+  const turns = 2 + Math.round((I + C) / 2);
+  const steps = 260 + P * 40;
+  const rMax = 190 + I * 6;
+  const baseW = (1.4 + E * 0.6) * intensity;
+  const ampW = (0.8 + C * 0.3) * intensity;
+  const kW = 3 + Math.floor(rnd() * 4);
+  const ctr = [];
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const a = t * turns * TAU;
+    const r = 10 + rMax * t;
+    ctr.push({ x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r, t });
+  }
+  const left = [], right = [];
+  for (let i = 0; i < ctr.length - 1; i++) {
+    const p = ctr[i], q = ctr[i + 1], dx = q.x - p.x, dy = q.y - p.y, len = Math.max(1e-6, Math.hypot(dx, dy));
+    const nx = -dy / len, ny = dx / len;
+    const w = baseW * (1 + ampW * Math.sin(kW * p.t * TAU));
+    left.push({ x: p.x + nx * w, y: p.y + ny * w });
+    right.push({ x: p.x - nx * w, y: p.y - ny * w });
+  }
+  const rib = left.concat(right.reverse());
+  let d = `M ${rib[0].x.toFixed(2)} ${rib[0].y.toFixed(2)}`;
+  for (let i = 1; i < rib.length; i++) d += ` L ${rib[i].x.toFixed(2)} ${rib[i].y.toFixed(2)}`;
+  d += ' Z';
+  return d;
+}
+function buildLayersSVG(rng, params, inputs) {
+  const W = 512, H = 512, cx = W / 2, cy = H / 2;
+  const palette = PALETTES[inputs.palette] || PALETTES.gold;
+  // Use sfc32 PRNG for geometry
+  let localSeedHex = (window._last && window._last.seedHex) || '0'.repeat(64);
+  if (inputs._seedHex) localSeedHex = inputs._seedHex;
+  const prng = makeSfc32FromSeedHex(localSeedHex);
+  // --- SVG <defs> ---
+  let defs = `<defs>`;
+  defs += `<filter id="softglow"><feGaussianBlur stdDeviation="2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>`;
+  defs += `<radialGradient id="palGrad"><stop offset="0%" stop-color="${palette.light}"/><stop offset="70%" stop-color="${palette.main}"/><stop offset="100%" stop-color="${palette.shade}"/></radialGradient>`;
+  defs += `</defs>`;
+  // --- DOTS ---
+  const dotTones = inputs.palette === 'olo' ? ['#0D221B','#2B7E75','#E4D6B0'] : [palette.light, palette.main, palette.shade];
   const dotsCount = Math.min(400, Math.floor((inputs.pointsDensity||params.pointsDensity)/1.5));
-  const minDist = 13; // minimum center distance
-  const dotTones = palette.tones.slice(0,3); // use 2–3 tones
+  const minDist = 13;
   let placed = [];
   let dots = '';
   let attempts = 0;
@@ -170,187 +340,111 @@ function buildLayersSVG(rng, params, inputs){
     attempts++;
     const x = rng.nextRange(0, W);
     const y = rng.nextRange(0, H);
-    // Mask: avoid emblem/spiral (simple: avoid center disk for now)
     const distToCenter = Math.hypot(x-cx, y-cy);
     if (distToCenter < 60) continue;
-    // Enforce min center distance
     let ok = true;
     for (let j=0;j<placed.length;j++) {
       const d2 = (x-placed[j][0])**2 + (y-placed[j][1])**2;
       if (d2 < minDist*minDist) { ok = false; break; }
     }
     if (!ok) continue;
-    // Palette tone distribution: cycle through tones
     const tone = dotTones[placed.length % dotTones.length];
     const r = Math.max(0.8, rng.nextRange(0.8, 2.0));
-    const alpha = (0.38 + rng.nextRange(0,0.18)).toFixed(2);
-    dots += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r.toFixed(2)}" fill="${tone}" fill-opacity="${alpha}"/>`;
+    dots += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r.toFixed(2)}" fill="${tone}" fill-opacity="1"/>`;
     placed.push([x,y]);
   }
-  // Draw gray coil-style spiral as background web for all styles
-  let webPath = '';
-  const webSteps = 180;
-  const webTurns = 5 + Math.floor(rng.nextRange(0, 3)); // 5-7 turns
-  const webMaxRadius = 200 + params.rings * 8;
-  for (let i=0;i<=webSteps;i++){
-    const t = i/webSteps;
-    const angle = t * webTurns * 2 * Math.PI;
-    const r = 8 + t * webMaxRadius;
-    const x = cx + r * Math.cos(angle);
-    const y = cy + r * Math.sin(angle);
-    webPath += (i===0? `M${x.toFixed(2)} ${y.toFixed(2)}` : ` L${x.toFixed(2)} ${y.toFixed(2)}`);
-  }
-  const grayColor = 'rgba(180,180,180,0.5)';
-  const webCoil = `<path d="${webPath}" fill="none" stroke="${grayColor}" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" opacity="0.7"/>`;
-  // Flower shape for the main line (replaces spiral/coil)
-  const steps = 160;
-  const petalCount = 6 + Math.floor(rng.nextRange(0, 3)); // 6-8 petals
-  const baseRadius = 60 + params.rings * 8;
-  const amplitude = 18 + params.turns * 4;
-  const P = inputs.P;
-  const thickness = 1 + P * 0.4;
-  let path = '';
-  for (let i=0;i<=steps;i++){
-    const t = i/steps;
-    const angle = t * 2 * Math.PI;
-    const r = baseRadius + amplitude * Math.sin(petalCount * angle);
-    const x = cx + r * Math.cos(angle);
-    const y = cy + r * Math.sin(angle);
-    path += (i===0? `M${x.toFixed(2)} ${y.toFixed(2)}` : ` L${x.toFixed(2)} ${y.toFixed(2)}`);
-  }
-  const strokeColor = palette.main;
-  const wave = `<path d="${path}" fill="none" stroke="${strokeColor}" stroke-width="${thickness}" stroke-linecap="round" stroke-linejoin="round" opacity="0.95"/>`;
-  // Draw gray concentric circles (spider web) for all styles
-  const rings = params.rings;
-  let circlesGroup = `<g stroke="${grayColor}" stroke-width="1.6" fill="none" opacity="0.95">`;
-  for (let r=0;r<rings;r++){
-    const rad = 18 + r*12;
-    circlesGroup += `<circle cx="${cx}" cy="${cy}" r="${rad}" />`;
-  }
-  circlesGroup += `</g>`;
-  // Emblem: simple parametric flower or polygon depending on style
+  dots = `<g opacity="1">${dots}</g>`;
+  // --- SPIRAL/COIL (reference logic) ---
+  const spiralPath = renderSpiralVarWidth({ cx, cy, rnd: prng, energies: [inputs.P, inputs.I, inputs.E, inputs.C], intensity: inputs.wavesIntensity || 0.6 });
+  const spiral = `<path d="${spiralPath}" fill="#8fb4ff" fill-opacity="0.12" stroke="none"/>`;
+  // --- EMBLEM & RAYS LAYER (reference logic) ---
   let emblem = '';
-  if (inputs.style === 'organica'){
-    const petCount = 5 + Math.floor(rng.nextRange(0,4));
-    let em = '';
-    for (let j=0;j<petCount;j++){
-      const a = (j/petCount)*2*Math.PI;
-      const r = 40 + params.rings*6 + 8*Math.sin(j*2 + rng.nextRange(0,6.28));
-      const x = cx + r*Math.cos(a), y = cy + r*Math.sin(a);
-      em += `M${cx} ${cy} L${x.toFixed(1)} ${y.toFixed(1)} `;
+  let raysGroup = '';
+  let shadow = '';
+  // Use sfc32 PRNG for geometry
+  if (inputs.style === 'organica') {
+    const out = genOrganica({ cx, cy, rnd: prng, energies: [inputs.P, inputs.I, inputs.E, inputs.C], lineScale: inputs.lineScale || 1 });
+    shadow = `<path d="${out.d} Z" fill="none" stroke="#fff" stroke-width="4.5" opacity="0.08"/>`;
+    emblem = `<path d="${out.d} Z" fill="none" stroke="${palette.main}" stroke-width="2.8" opacity="0.93"/>`;
+    emblem += `<circle cx="${cx}" cy="${cy}" r="${out.core.r}" stroke="${palette.main}" stroke-opacity="0.7" stroke-width="1" fill="none"/>`;
+  } else if (inputs.style === 'geometric') {
+    const out = genGeometric({ cx, cy, rnd: prng, energies: [inputs.P, inputs.I, inputs.E, inputs.C], raysLevel: inputs.raysLevel || 40, lineScale: inputs.lineScale || 1 });
+    shadow = `<path d="${out.d} Z" fill="none" stroke="#fff" stroke-width="4.5" opacity="0.08"/>`;
+    emblem = `<path d="${out.d} Z" fill="none" stroke="${palette.main}" stroke-width="2.8" opacity="0.93"/>`;
+    if (out.rays && out.rays.items) {
+      for (const r of out.rays.items) {
+        raysGroup += `<line x1="${r.x1}" y1="${r.y1}" x2="${r.x2}" y2="${r.y2}" stroke="${ACCENT}" stroke-width="${r.w}" opacity="0.35"/>`;
+      }
+      raysGroup = `<g>${raysGroup}</g>`;
     }
-    emblem = `${webCoil}${circlesGroup}<g stroke="${strokeColor}" stroke-width="1.6" fill="none" opacity="0.95">${em}</g>`;
-  } else if (inputs.style === 'geometric'){
-    let g = `${webCoil}${circlesGroup}`;
-    const rays = Math.round(params.raysLevel/100 * 48);
-    g += `<g stroke="${grayColor}" stroke-width="1.6" fill="none" opacity="0.95">`;
-    for (let k=0;k<rays;k++){
-      const a = k / Math.max(1,rays) * Math.PI*2;
-      const x1 = cx + Math.cos(a)*(params.rings*10), y1 = cy + Math.sin(a)*(params.rings*10);
-      const x2 = cx + Math.cos(a)*(params.rings*28), y2 = cy + Math.sin(a)*(params.rings*28);
-      g += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" />`;
-    }
-    g += `</g>`; emblem = g;
-  } else {
-    let ribbon = `<g fill="none" stroke="${strokeColor}" opacity="0.95">`;
-    for (let k=0;k<3;k++){
-      ribbon += `<path d="${path}" stroke-width="${2 + k*1.6}" stroke-linecap="round" stroke-linejoin="round"/>`;
-    }
-    ribbon += `</g>`;
-    emblem = `${webCoil}${circlesGroup}${ribbon}`;
+  } else if (inputs.style === 'calligraphic') {
+    const out = genCalligraphic({ cx, cy, rnd: prng, energies: [inputs.P, inputs.I, inputs.E, inputs.C], penMul: inputs.penMul, penSmooth: inputs.penSmooth, lineScale: inputs.lineScale || 1 });
+    emblem = `<path d="${out.d} Z" fill="url(#palGrad)" fill-opacity="0.92" stroke="none" stroke-width="0"/>`;
   }
-  let core = `<circle cx="${cx}" cy="${cy}" r="${12 + params.rings}" fill="rgba(255, 230, 150, 0.12)"/>`;
-  core += `<circle cx="${cx}" cy="${cy}" r="${6 + Math.floor(params.rings/2)}" fill="hsl(${params.paletteHue} 80% 60%)"/>`;
-  // --- WAVES/RINGS LAYER ---
-  // Use palette pale tones and correct alpha, match reference logic
-  let waves = '';
-  const ringCount = params.rings;
-  const waveAlpha = 0.22 + (inputs.wavesIntensity||params.wavesIntensity||0.6)*0.18;
-  for (let r=0; r<ringCount; r++) {
-    // Palette: use the lightest tone, or shift main color to a pale version
-    let tone = palette.tones[0];
-    // Optionally, shift to a paler HSL for more reference-like look
-    if (palette.main.startsWith('hsl')) {
-      // e.g. hsl(45, 90%, 60%) => hsl(45, 60%, 85%)
-      tone = palette.main.replace(/(\d+),\s*(\d+)%?,\s*(\d+)%?/, (m,h,s,l)=>`${h},${Math.max(30,Math.floor(s*0.7))}%,${85-(r*2)}%`);
-    }
-    const rad = 32 + r*22 + Math.sin(r*1.2)*4;
-    const width = 2.2 + (r%2)*0.7;
-    waves += `<circle cx="${cx}" cy="${cy}" r="${rad.toFixed(1)}" stroke="${tone}" stroke-width="${width.toFixed(2)}" fill="none" opacity="${waveAlpha.toFixed(2)}"/>`;
-  }
-  // --- SPIRAL LAYER ---
-  // Variable-width spiral with Catmull-Rom smoothing, palette tones, correct alpha
-  let spiral = '';
-  const spiralSteps = 120;
-  const spiralTurns = params.turns;
-  const spiralBase = 38 + params.rings*7;
-  const spiralAmp = 16 + (inputs.P||0)*2;
-  const spiralAlpha = 0.32 + (inputs.wavesIntensity||params.wavesIntensity||0.6)*0.13;
-  // Generate spiral points
-  let spiralPts = [];
-  for (let i=0; i<=spiralSteps; i++) {
-    const t = i/spiralSteps;
-    const angle = t * spiralTurns * 2 * Math.PI;
-    const r = spiralBase + spiralAmp * Math.sin(spiralTurns*1.2 * t + Math.cos(t*2));
-    const x = cx + r * Math.cos(angle);
-    const y = cy + r * Math.sin(angle);
-    spiralPts.push([x, y]);
-  }
-  // Catmull-Rom smoothing
-  function catmullRomSpline(pts, tension=0.5) {
-    let d = '';
-    for (let i=0; i<pts.length-1; i++) {
-      const p0 = pts[i-1] || pts[i];
-      const p1 = pts[i];
-      const p2 = pts[i+1];
-      const p3 = pts[i+2] || pts[i+1];
-      const c1x = p1[0] + (p2[0]-p0[0])/6*tension;
-      const c1y = p1[1] + (p2[1]-p0[1])/6*tension;
-      const c2x = p2[0] - (p3[0]-p1[0])/6*tension;
-      const c2y = p2[1] - (p3[1]-p1[1])/6*tension;
-      if (i===0) d += `M${p1[0].toFixed(2)} ${p1[1].toFixed(2)}`;
-      d += ` C${c1x.toFixed(2)} ${c1y.toFixed(2)},${c2x.toFixed(2)} ${c2y.toFixed(2)},${p2[0].toFixed(2)} ${p2[1].toFixed(2)}`;
-    }
-    return d;
-  }
-  const spiralPath = catmullRomSpline(spiralPts, 0.55);
-  // Use a pale palette tone
-  let spiralTone = palette.tones[0];
-  if (palette.main.startsWith('hsl')) {
-    spiralTone = palette.main.replace(/(\d+),\s*(\d+)%?,\s*(\d+)%?/, (m,h,s,l)=>`${h},${Math.max(25,Math.floor(s*0.5))}%,${92}%`);
-  }
-  spiral = `<path d="${spiralPath}" fill="none" stroke="${spiralTone}" stroke-width="2.2" opacity="${spiralAlpha.toFixed(2)}"/>`;
-  const svgLayers = { dots, wave, emblem, core };
-  const svgContent = `${dots}${wave}${emblem}${core}`;
-  return { svgContent, svgLayers };
+  // --- CORE ---
+  let core = `<circle cx="${cx}" cy="${cy}" r="12" fill="none" stroke="${palette.main}" stroke-opacity="0.7" stroke-width="1.8"/>`;
+  core += `<circle cx="${cx}" cy="${cy}" r="6" fill="${ACCENT}" fill-opacity="0.18"/>`;
+  // --- GROUPS & ORDER ---
+  let svgContent = `${defs}${dots}${spiral}${raysGroup}${shadow}${emblem}${core}`;
+  return { svgContent };
 }
 
-async function generateAll(inputs){
+// --- Hash helpers ---
+async function keccak256Hex(str) {
+  // Placeholder: in production, use a pure JS keccak256 (or import from reference)
+  // For now, fallback to sha256Hex for demo
+  return await sha256Hex(str);
+}
+// --- Deterministic JSON serialization (sorted keys, normalized numbers) ---
+function stableStringify(obj) {
+  if (obj === null) return 'null';
+  if (typeof obj !== 'object') return JSON.stringify(obj);
+  if (Array.isArray(obj)) return '[' + obj.map(stableStringify).join(',') + ']';
+  const keys = Object.keys(obj).sort();
+  return '{' + keys.map(k => JSON.stringify(k) + ':' + stableStringify(obj[k])).join(',') + '}';
+}
+// --- Main export logic ---
+async function generateAll(inputs) {
   const { seedString, seedHex } = await computeSeedHexFromInputs(inputs);
   const rng = makeRNGFromSeedHex(seedHex);
   const params = deriveParams(rng, inputs);
   const rng2 = makeRNGFromSeedHex(seedHex);
-  const { svgContent, svgLayers } = buildLayersSVG(rng2, params, inputs);
+  const { svgContent } = buildLayersSVG(rng2, params, inputs);
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-    <rect width="100%" height="100%" fill="#0b0f14"/>
+    <rect width="100%" height="100%" fill="#0F1417"/>
     ${svgContent}
   </svg>`;
+  // Hashes
+  const huidHash = await keccak256Hex(inputs.huid);
+  const svgHash = await sha256Hex(svg);
+  // JSON metadata
   const jsonMeta = {
     seedHex,
     seedString,
     params: { ...params },
     inputs: { ...inputs },
-    layers: {
-      dots: { count: Math.min(400, Math.floor(params.pointsDensity/1.5)), opacityRange:[0.45,0.6] },
-      wave: { turns: params.turns, thicknessEstimate: (1 + inputs.P*0.4) },
-      emblem: { style: inputs.style },
-      core: { rings: params.rings }
+    ids: {
+      huidHash,
+      svgHash,
+    },
+    export: {
+      svg: true,
+      png512: true,
+      png1024: true,
+      json: true
+    },
+    view: {
+      width: 512,
+      height: 512,
+      bg: '#0F1417'
     }
   };
   const jsonNoHash = stableStringify(jsonMeta);
-  const hashHex = await sha256Hex(jsonNoHash);
-  const jsonOut = Object.assign({}, jsonMeta, { hashHex });
-  return { svg, jsonOut, seedHex, seedString };
+  const jsonHash = await sha256Hex(jsonNoHash);
+  const hashHex = jsonHash;
+  jsonMeta.ids.jsonHash = jsonHash;
+  jsonMeta.hashHex = hashHex;
+  return { svg, jsonOut: jsonMeta, seedHex, seedString };
 }
 
 /* -------------------- Export helpers -------------------- */
@@ -369,7 +463,7 @@ function svgToPng(svgStr, size=512){
       const canvas = document.createElement('canvas');
       canvas.width = size; canvas.height = size;
       const ctx = canvas.getContext('2d');
-      ctx.fillStyle = '#0b0f14'; ctx.fillRect(0,0,canvas.width,canvas.height);
+      ctx.fillStyle = PALETTES.bg.bg; ctx.fillRect(0,0,canvas.width,canvas.height);
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
       canvas.toBlob(blob => { URL.revokeObjectURL(url); resolve(blob); }, 'image/png');
     };
