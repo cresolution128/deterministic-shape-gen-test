@@ -278,6 +278,48 @@ function buildLayersSVG(rng, params, inputs){
     const width = 2.2 + (r%2)*0.7;
     waves += `<circle cx="${cx}" cy="${cy}" r="${rad.toFixed(1)}" stroke="${tone}" stroke-width="${width.toFixed(2)}" fill="none" opacity="${waveAlpha.toFixed(2)}"/>`;
   }
+  // --- SPIRAL LAYER ---
+  // Variable-width spiral with Catmull-Rom smoothing, palette tones, correct alpha
+  let spiral = '';
+  const spiralSteps = 120;
+  const spiralTurns = params.turns;
+  const spiralBase = 38 + params.rings*7;
+  const spiralAmp = 16 + (inputs.P||0)*2;
+  const spiralAlpha = 0.32 + (inputs.wavesIntensity||params.wavesIntensity||0.6)*0.13;
+  // Generate spiral points
+  let spiralPts = [];
+  for (let i=0; i<=spiralSteps; i++) {
+    const t = i/spiralSteps;
+    const angle = t * spiralTurns * 2 * Math.PI;
+    const r = spiralBase + spiralAmp * Math.sin(spiralTurns*1.2 * t + Math.cos(t*2));
+    const x = cx + r * Math.cos(angle);
+    const y = cy + r * Math.sin(angle);
+    spiralPts.push([x, y]);
+  }
+  // Catmull-Rom smoothing
+  function catmullRomSpline(pts, tension=0.5) {
+    let d = '';
+    for (let i=0; i<pts.length-1; i++) {
+      const p0 = pts[i-1] || pts[i];
+      const p1 = pts[i];
+      const p2 = pts[i+1];
+      const p3 = pts[i+2] || pts[i+1];
+      const c1x = p1[0] + (p2[0]-p0[0])/6*tension;
+      const c1y = p1[1] + (p2[1]-p0[1])/6*tension;
+      const c2x = p2[0] - (p3[0]-p1[0])/6*tension;
+      const c2y = p2[1] - (p3[1]-p1[1])/6*tension;
+      if (i===0) d += `M${p1[0].toFixed(2)} ${p1[1].toFixed(2)}`;
+      d += ` C${c1x.toFixed(2)} ${c1y.toFixed(2)},${c2x.toFixed(2)} ${c2y.toFixed(2)},${p2[0].toFixed(2)} ${p2[1].toFixed(2)}`;
+    }
+    return d;
+  }
+  const spiralPath = catmullRomSpline(spiralPts, 0.55);
+  // Use a pale palette tone
+  let spiralTone = palette.tones[0];
+  if (palette.main.startsWith('hsl')) {
+    spiralTone = palette.main.replace(/(\d+),\s*(\d+)%?,\s*(\d+)%?/, (m,h,s,l)=>`${h},${Math.max(25,Math.floor(s*0.5))}%,${92}%`);
+  }
+  spiral = `<path d="${spiralPath}" fill="none" stroke="${spiralTone}" stroke-width="2.2" opacity="${spiralAlpha.toFixed(2)}"/>`;
   const svgLayers = { dots, wave, emblem, core };
   const svgContent = `${dots}${wave}${emblem}${core}`;
   return { svgContent, svgLayers };
