@@ -25,7 +25,12 @@
     <div class="card">
       <div><small>Inputs (seed string will be SHA-256("HUID|ts|P,I,E,C|context|style|v12"))</small></div>
       <label>HUID <input id="huid" value="H-DET-001"/></label>
-      <label>ts (timestamp) <input id="ts" value="1723654321123"/></label>
+      <label>ts (timestamp)
+        <div style="display:flex;gap:8px;align-items:center;">
+          <input id="ts" value="1723654321123" style="flex:1;"/>
+          <button id="tsNow" type="button" style="min-width:60px;">Now</button>
+        </div>
+      </label>
       <div style="margin-top:8px;">
         <div style="font-size:12px;color:#9fb0c8;margin-bottom:2px;">Energies</div>
         <label style="display:flex;align-items:center;gap:8px;margin-top:8px;">
@@ -71,6 +76,58 @@
           <option value="olo">Olo</option>
         </select>
       </label>
+      <!-- Advanced Controls -->
+      <div style="margin-top:12px;padding:8px 0 0 0;border-top:1px solid #223344;">
+        <div style="font-size:12px;color:#9fb0c8;margin-bottom:2px;">Advanced Controls</div>
+        <label style="display:flex;align-items:center;gap:8px;">
+          <span style="width:90px;">pointsDensity</span>
+          <input id="pointsDensity" type="range" min="80" max="360" step="5" value="220" style="flex:1;" oninput="document.getElementById('vPD').textContent=this.value">
+          <span id="vPD" style="min-width:32px;display:inline-block;text-align:right;">220</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;">
+          <span style="width:90px;">lineScale</span>
+          <input id="lineScale" type="range" min="0.5" max="2.5" step="0.05" value="1.00" style="flex:1;" oninput="document.getElementById('vLS').textContent=this.value">
+          <span id="vLS" style="min-width:32px;display:inline-block;text-align:right;">1.00</span>
+        </label>
+        <div id="geoBlock" style="display:none;">
+          <div style="font-size:12px;color:#9fb0c8;margin-top:8px;">Geometric Only</div>
+          <label style="display:flex;align-items:center;gap:8px;">
+            <span style="width:90px;">raysLevel</span>
+            <input id="raysLevel" type="range" min="0" max="100" step="1" value="60" style="flex:1;" oninput="document.getElementById('vR').textContent=this.value">
+            <span id="vR" style="min-width:32px;display:inline-block;text-align:right;">60</span>
+          </label>
+        </div>
+        <div id="calBlock" style="display:none;">
+          <div style="font-size:12px;color:#9fb0c8;margin-top:8px;">Calligraphic Only</div>
+          <label style="display:flex;align-items:center;gap:8px;">
+            <span style="width:90px;">penMul</span>
+            <input id="penMul" type="range" min="0.5" max="3.0" step="0.05" value="1.60" style="flex:1;" oninput="document.getElementById('vPM').textContent=this.value">
+            <span id="vPM" style="min-width:32px;display:inline-block;text-align:right;">1.60</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;">
+            <span style="width:90px;">penSmooth</span>
+            <input id="penSmooth" type="range" min="0" max="3" step="1" value="2" style="flex:1;" oninput="document.getElementById('vPS').textContent=this.value">
+            <span id="vPS" style="min-width:32px;display:inline-block;text-align:right;">2</span>
+          </label>
+        </div>
+        <label style="display:flex;align-items:center;gap:8px;">
+          <span style="width:90px;">wavesIntensity</span>
+          <input id="wavesIntensity" type="range" min="0" max="1" step="0.05" value="0.6" style="flex:1;" oninput="document.getElementById('vWI').textContent=this.value">
+          <span id="vWI" style="min-width:32px;display:inline-block;text-align:right;">0.60</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;">
+          <span style="width:90px;">PNG transparency</span>
+          <input id="pngAlpha" type="range" min="0" max="1" step="0.05" value="1" style="flex:1;" oninput="document.getElementById('vPA').textContent=this.value">
+          <span id="vPA" style="min-width:32px;display:inline-block;text-align:right;">1.00</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;">
+          <input id="autoRegen" type="checkbox" style="width:auto;">
+          <span>Auto-regen on input change</span>
+        </label>
+        <div style="display:flex;gap:8px;margin-top:8px;">
+          <button id="randE" type="button">Random energies</button>
+        </div>
+      </div>
 
       <div style="margin-top:8px" class="row">
         <button id="gen">Generate</button>

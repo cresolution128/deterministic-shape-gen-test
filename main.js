@@ -313,9 +313,59 @@ async function readInputs(){
     C: Number(el('C').value || 0),
     context: el('context').value,
     style: el('style').value,
-    palette: el('palette').value
+    palette: el('palette').value,
+    pointsDensity: Number(el('pointsDensity')?.value || 220),
+    lineScale: Number(el('lineScale')?.value || 1),
+    raysLevel: Number(el('raysLevel')?.value || 60),
+    penMul: Number(el('penMul')?.value || 1.6),
+    penSmooth: Number(el('penSmooth')?.value || 2),
+    wavesIntensity: Number(el('wavesIntensity')?.value || 0.6),
+    pngAlpha: Number(el('pngAlpha')?.value || 1),
+    autoRegen: !!el('autoRegen')?.checked
   };
 }
+// Show/hide advanced blocks based on style
+function updateAdvancedBlocks() {
+  const style = el('style').value;
+  el('geoBlock').style.display = style === 'geometric' ? '' : 'none';
+  el('calBlock').style.display = style === 'calligraphic' ? '' : 'none';
+}
+el('style').addEventListener('change', updateAdvancedBlocks);
+updateAdvancedBlocks();
+// Now button for timestamp
+if (el('tsNow')) {
+  el('tsNow').addEventListener('click',()=>{
+    el('ts').value = Date.now();
+    if (el('autoRegen')?.checked) renderAndShow();
+  });
+}
+// Random energies button
+if (el('randE')) {
+  el('randE').addEventListener('click',()=>{
+    el('P').value = Math.floor(Math.random()*6);
+    el('I').value = Math.floor(Math.random()*6);
+    el('E').value = Math.floor(Math.random()*6);
+    el('C').value = Math.floor(Math.random()*6);
+    el('P_val').textContent = el('P').value;
+    el('I_val').textContent = el('I').value;
+    el('E_val').textContent = el('E').value;
+    el('C_val').textContent = el('C').value;
+    if (el('autoRegen')?.checked) renderAndShow();
+  });
+}
+// Auto-regen logic
+const autoInputs = [
+  'huid','ts','P','I','E','C','context','style','palette',
+  'pointsDensity','lineScale','raysLevel','penMul','penSmooth','wavesIntensity','pngAlpha'
+];
+autoInputs.forEach(id=>{
+  const elem = el(id);
+  if (elem) {
+    elem.addEventListener('input',()=>{
+      if (el('autoRegen')?.checked) renderAndShow();
+    });
+  }
+});
 async function renderAndShow(){
   const inputs = await readInputs();
   const res = await generateAll(inputs);
