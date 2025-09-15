@@ -261,6 +261,23 @@ function buildLayersSVG(rng, params, inputs){
   }
   let core = `<circle cx="${cx}" cy="${cy}" r="${12 + params.rings}" fill="rgba(255, 230, 150, 0.12)"/>`;
   core += `<circle cx="${cx}" cy="${cy}" r="${6 + Math.floor(params.rings/2)}" fill="hsl(${params.paletteHue} 80% 60%)"/>`;
+  // --- WAVES/RINGS LAYER ---
+  // Use palette pale tones and correct alpha, match reference logic
+  let waves = '';
+  const ringCount = params.rings;
+  const waveAlpha = 0.22 + (inputs.wavesIntensity||params.wavesIntensity||0.6)*0.18;
+  for (let r=0; r<ringCount; r++) {
+    // Palette: use the lightest tone, or shift main color to a pale version
+    let tone = palette.tones[0];
+    // Optionally, shift to a paler HSL for more reference-like look
+    if (palette.main.startsWith('hsl')) {
+      // e.g. hsl(45, 90%, 60%) => hsl(45, 60%, 85%)
+      tone = palette.main.replace(/(\d+),\s*(\d+)%?,\s*(\d+)%?/, (m,h,s,l)=>`${h},${Math.max(30,Math.floor(s*0.7))}%,${85-(r*2)}%`);
+    }
+    const rad = 32 + r*22 + Math.sin(r*1.2)*4;
+    const width = 2.2 + (r%2)*0.7;
+    waves += `<circle cx="${cx}" cy="${cy}" r="${rad.toFixed(1)}" stroke="${tone}" stroke-width="${width.toFixed(2)}" fill="none" opacity="${waveAlpha.toFixed(2)}"/>`;
+  }
   const svgLayers = { dots, wave, emblem, core };
   const svgContent = `${dots}${wave}${emblem}${core}`;
   return { svgContent, svgLayers };
