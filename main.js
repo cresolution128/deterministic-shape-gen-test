@@ -159,15 +159,33 @@ function buildLayersSVG(rng, params, inputs){
     olo:    { main: 'hsl(160, 60%, 50%)', tones: ['#a7ffeb', '#1de9b6', '#004d40'] }
   };
   const palette = paletteMap[inputs.palette] || paletteMap.gold;
-  const dotsCount = Math.min(400, Math.floor(params.pointsDensity/1.5));
+  // Blue-noise dots: dart-throwing
+  const dotsCount = Math.min(400, Math.floor((inputs.pointsDensity||params.pointsDensity)/1.5));
+  const minDist = 13; // minimum center distance
+  const dotTones = palette.tones.slice(0,3); // use 2–3 tones
+  let placed = [];
   let dots = '';
-  for (let i=0;i<dotsCount;i++){
+  let attempts = 0;
+  while (placed.length < dotsCount && attempts < dotsCount*20) {
+    attempts++;
     const x = rng.nextRange(0, W);
     const y = rng.nextRange(0, H);
-    const r = Math.max(0.1, rng.nextRange(0.1, 2.0));
-    const tone = palette.tones[Math.floor(rng.nextRange(0, palette.tones.length))];
-    const alpha = (0.45 + rng.nextRange(0,0.15)).toFixed(2);
+    // Mask: avoid emblem/spiral (simple: avoid center disk for now)
+    const distToCenter = Math.hypot(x-cx, y-cy);
+    if (distToCenter < 60) continue;
+    // Enforce min center distance
+    let ok = true;
+    for (let j=0;j<placed.length;j++) {
+      const d2 = (x-placed[j][0])**2 + (y-placed[j][1])**2;
+      if (d2 < minDist*minDist) { ok = false; break; }
+    }
+    if (!ok) continue;
+    // Palette tone distribution: cycle through tones
+    const tone = dotTones[placed.length % dotTones.length];
+    const r = Math.max(0.8, rng.nextRange(0.8, 2.0));
+    const alpha = (0.38 + rng.nextRange(0,0.18)).toFixed(2);
     dots += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r.toFixed(2)}" fill="${tone}" fill-opacity="${alpha}"/>`;
+    placed.push([x,y]);
   }
   // Draw gray coil-style spiral as background web for all styles
   let webPath = '';
