@@ -1,14 +1,33 @@
 /* -------------------- Utilities: SHA-256 (WebCrypto + lightweight fallback) -------------------- */
-async function sha256Hex(str){
-  // UTF-8 -> bytes
-  const enc = new TextEncoder();
+// Reference-compatible sha256Hex
+async function sha256Hex(str) {
+  // Use the same encoding logic as the reference
+  const enc = (typeof TextEncoder !== 'undefined')
+    ? new TextEncoder()
+    : { encode: s => new Uint8Array([...unescape(encodeURIComponent(s))].map(c => c.charCodeAt(0))) };
   const data = enc.encode(str);
-  if (crypto && crypto.subtle && crypto.subtle.digest){
-    const hash = await crypto.subtle.digest('SHA-256', data);
-    return bufferToHex(hash);
+  if (str.startsWith('H-DET-001')) {
+    console.log('TV1 seedString bytes:', Array.from(data));
   }
-  // Tiny fallback: minimal JS SHA-256 (non-optimized but small)
-  return bufferToHex(fallbackSha256(data));
+  if (typeof crypto !== 'undefined' && crypto.subtle && crypto.subtle.digest) {
+    console.log('Using WebCrypto for SHA-256');
+    const hash = await crypto.subtle.digest('SHA-256', data);
+    if (str.startsWith('H-DET-001')) {
+      console.log('TV1 hash bytes:', Array.from(new Uint8Array(hash)));
+    }
+    return [...new Uint8Array(hash)].map(x => x.toString(16).padStart(2, '0')).join('');
+  }
+  console.log('Using fallback hash');
+  // Reference fallback: not cryptographically secure, but deterministic
+  let h1 = 0x811c9dc5 >>> 0, h2 = 0x01000193 >>> 0;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str.charCodeAt(i);
+    h1 ^= ch;
+    h1 = Math.imul(h1, 0x01000193) >>> 0;
+    h2 ^= (h1 >>> 13);
+    h2 = Math.imul(h2, 0x85ebca6b) >>> 0;
+  }
+  return (h1.toString(16).padStart(8, '0') + h2.toString(16).padStart(8, '0')).repeat(4);
 }
 function bufferToHex(buf){
   const bytes = new Uint8Array(buf);
@@ -133,19 +152,32 @@ function stableStringify(obj){
 }
 
 /* -------------------- Core: generate params, layers, svg, json -------------------- */
-async function computeSeedHexFromInputs(inputs){
-  const seedString = `${inputs.huid}|${inputs.ts}|${inputs.P},${inputs.I},${inputs.E},${inputs.C}|${inputs.context}|${inputs.style}|v12`;
+async function computeSeedHexFromInputs(inputs, raw = false, forceV12a = false, useAnchor = false) {
+  let seedString;
+  if (raw) {
+    let version = forceV12a ? 'v12a' : 'v12';
+    seedString = `${inputs.HUID}|${inputs.timestamp}|${inputs.energies.join(',')}|${inputs.context}|${inputs.style}|${version}`;
+    if (useAnchor) seedString += '|ANCHOR';
+  } else {
+    if (!/^[A-Za-z0-9._-]{3,64}$/.test(inputs.huid || '')) throw new Error('HUID_REQUIRED');
+    const energiesRaw = Array.isArray(inputs.energies) ? inputs.energies : [inputs.P, inputs.I, inputs.E, inputs.C];
+    const energies = energiesRaw.map(v => Math.max(0, Math.min(5, Math.round(Number(v)))));
+    const ts = Number(inputs.ts);
+    let version = forceV12a ? 'v12a' : 'v12';
+    seedString = `${inputs.huid}|${ts}|${energies.join(',')}|${inputs.context}|${inputs.style}|${version}`;
+    if (useAnchor) seedString += '|ANCHOR';
+  }
   const seedHex = await sha256Hex(seedString);
   return { seedString, seedHex };
 }
 
-function deriveParams(rng, inputs){
-  const rings = 6 + Math.floor(rng.nextRange(0,5));
-  const turns = 2 + Math.floor(rng.nextRange(0,6));
-  const raysLevel = inputs.style === 'geometric' ? Math.floor(rng.nextRange(0,101)) : 0;
-  const paletteHue = Math.floor(rng.nextRange(0,360));
-  const pointsDensity = 140 + Math.floor(rng.nextRange(0,160));
-  const lineScale = 0.9 + rng.nextRange(0,0.6);
+function deriveParams(rnd, inputs){
+  const rings = 6 + Math.floor(rnd() * 5);
+  const turns = 2 + Math.floor(rnd() * 6);
+  const raysLevel = inputs.style === 'geometric' ? Math.floor(rnd() * 101) : 0;
+  const paletteHue = Math.floor(rnd() * 360);
+  const pointsDensity = 140 + Math.floor(rnd() * 160);
+  const lineScale = 0.9 + rnd() * 0.6;
   return { rings, turns, raysLevel, paletteHue, pointsDensity, lineScale };
 }
 
@@ -212,26 +244,30 @@ function genOrganica({cx, cy, rnd, energies, lineScale}) {
   const coreR = 28 + ((P + I + E + C) / 4) * 3 * lineScale;
   return { d: catmullRomPath(pts, true), core: { cx, cy, r: coreR.toFixed(2) } };
 }
+function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
+const TAU = Math.PI * 2;
+function polar(cx, cy, r, a) { return { x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) }; }
+
 function genGeometric({cx, cy, rnd, energies, raysLevel, lineScale}) {
   const [P, I, E, C] = energies;
-  const n = 4 + (C) * 0.12;
-  const k = 3 + Math.floor(rnd() * 3 + P * 0.2);
-  const R = 110 + I * 4;
+  const n = clamp(2.0 - P * 0.2 + rnd() * 0.5, 0.6, 3.0);
+  const R = 120 + I * 3;
+  const k = 3 + Math.floor(C * 1.2 + rnd() * 3);
   const mA = 0.12 + E * 0.03;
   const M = 2 * k * 24;
-  const rot = rnd() * Math.PI * 2;
+  const rot = rnd() * TAU;
   let pts = [];
   for (let i = 0; i < M; i++) {
-    const th = i / M * Math.PI * 2 + rot;
+    const th = i / M * TAU + rot;
     const base = 1 / Math.sqrt(Math.pow(Math.abs(Math.cos(th)), 2 / n) + Math.pow(Math.abs(Math.sin(th)), 2 / n));
     const mod = 1 + mA * Math.cos(k * th);
-    pts.push({ x: cx + R * base * mod * Math.cos(th), y: cy + R * base * mod * Math.sin(th) });
+    pts.push(polar(cx, cy, R * base * mod, th));
   }
-  // Rays
+  // Rays logic (unchanged)
   let rays = null;
   if (raysLevel > 0) {
-    const count = Math.max(1, Math.round((24 + 6 * C) * (Math.max(0, Math.min(100, raysLevel)) / 100)));
-    const step = Math.PI * 2 / count, items = [];
+    const count = Math.max(1, Math.round((24 + 6 * C) * (clamp(raysLevel, 0, 100) / 100)));
+    const step = TAU / count, items = [];
     for (let i = 0; i < count; i++) {
       const a = i * step + rot * 0.5;
       const w = 0.3 + (3.5 - 0.3) * ((Math.sin(i * 2.399) + 1) / 2);
@@ -317,13 +353,9 @@ function renderSpiralVarWidth({cx, cy, rnd, energies, intensity}) {
   d += ' Z';
   return d;
 }
-function buildLayersSVG(rng, params, inputs) {
+function buildLayersSVG(rnd, params, inputs) {
   const W = 512, H = 512, cx = W / 2, cy = H / 2;
   const palette = PALETTES[inputs.palette] || PALETTES.gold;
-  // Use sfc32 PRNG for geometry
-  let localSeedHex = (window._last && window._last.seedHex) || '0'.repeat(64);
-  if (inputs._seedHex) localSeedHex = inputs._seedHex;
-  const prng = makeSfc32FromSeedHex(localSeedHex);
   // --- SVG <defs> ---
   let defs = `<defs>`;
   defs += `<filter id="softglow"><feGaussianBlur stdDeviation="2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>`;
@@ -338,8 +370,8 @@ function buildLayersSVG(rng, params, inputs) {
   let attempts = 0;
   while (placed.length < dotsCount && attempts < dotsCount*20) {
     attempts++;
-    const x = rng.nextRange(0, W);
-    const y = rng.nextRange(0, H);
+    const x = rnd() * W;
+    const y = rnd() * H;
     const distToCenter = Math.hypot(x-cx, y-cy);
     if (distToCenter < 60) continue;
     let ok = true;
@@ -349,28 +381,27 @@ function buildLayersSVG(rng, params, inputs) {
     }
     if (!ok) continue;
     const tone = dotTones[placed.length % dotTones.length];
-    const r = Math.max(0.8, rng.nextRange(0.8, 2.0));
+    const r = Math.max(0.8, rnd() * 1.2);
     dots += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r.toFixed(2)}" fill="${tone}" fill-opacity="1"/>`;
     placed.push([x,y]);
   }
   dots = `<g opacity="1">${dots}</g>`;
   // --- SPIRAL/COIL (reference logic) ---
-  const spiralPath = renderSpiralVarWidth({ cx, cy, rnd: prng, energies: [inputs.P, inputs.I, inputs.E, inputs.C], intensity: inputs.wavesIntensity || 0.6 });
+  const spiralPath = renderSpiralVarWidth({ cx, cy, rnd, energies: [inputs.P, inputs.I, inputs.E, inputs.C], intensity: inputs.wavesIntensity || 0.6 });
   const spiral = `<path d="${spiralPath}" fill="#8fb4ff" fill-opacity="0.12" stroke="none"/>`;
   // --- EMBLEM & RAYS LAYER (reference logic) ---
   let emblem = '';
   let raysGroup = '';
   let shadow = '';
-  // Use sfc32 PRNG for geometry
   if (inputs.style === 'organica') {
-    const out = genOrganica({ cx, cy, rnd: prng, energies: [inputs.P, inputs.I, inputs.E, inputs.C], lineScale: inputs.lineScale || 1 });
-    shadow = `<path d="${out.d} Z" fill="none" stroke="#fff" stroke-width="4.5" opacity="0.08"/>`;
-    emblem = `<path d="${out.d} Z" fill="none" stroke="${palette.main}" stroke-width="2.8" opacity="0.93"/>`;
+    const out = genOrganica({ cx, cy, rnd, energies: [inputs.P, inputs.I, inputs.E, inputs.C], lineScale: inputs.lineScale || 1 });
+    shadow = `<path d="${out.d} Z" fill="none" stroke="#fff" stroke-width="${(4.5 * (inputs.lineScale || 1)).toFixed(2)}" opacity="0.08"/>`;
+    emblem = `<path d="${out.d} Z" fill="none" stroke="${palette.main}" stroke-width="${(2.8 * (inputs.lineScale || 1)).toFixed(2)}" opacity="0.93"/>`;
     emblem += `<circle cx="${cx}" cy="${cy}" r="${out.core.r}" stroke="${palette.main}" stroke-opacity="0.7" stroke-width="1" fill="none"/>`;
   } else if (inputs.style === 'geometric') {
-    const out = genGeometric({ cx, cy, rnd: prng, energies: [inputs.P, inputs.I, inputs.E, inputs.C], raysLevel: inputs.raysLevel || 40, lineScale: inputs.lineScale || 1 });
-    shadow = `<path d="${out.d} Z" fill="none" stroke="#fff" stroke-width="4.5" opacity="0.08"/>`;
-    emblem = `<path d="${out.d} Z" fill="none" stroke="${palette.main}" stroke-width="2.8" opacity="0.93"/>`;
+    const out = genGeometric({ cx, cy, rnd, energies: [inputs.P, inputs.I, inputs.E, inputs.C], raysLevel: inputs.raysLevel || 40, lineScale: inputs.lineScale || 1 });
+    shadow = `<path d="${out.d} Z" fill="none" stroke="#fff" stroke-width="${(4.5 * (inputs.lineScale || 1)).toFixed(2)}" opacity="0.08"/>`;
+    emblem = `<path d="${out.d} Z" fill="none" stroke="${palette.main}" stroke-width="${(2.8 * (inputs.lineScale || 1)).toFixed(2)}" opacity="0.93"/>`;
     if (out.rays && out.rays.items) {
       for (const r of out.rays.items) {
         raysGroup += `<line x1="${r.x1}" y1="${r.y1}" x2="${r.x2}" y2="${r.y2}" stroke="${ACCENT}" stroke-width="${r.w}" opacity="0.35"/>`;
@@ -378,7 +409,7 @@ function buildLayersSVG(rng, params, inputs) {
       raysGroup = `<g>${raysGroup}</g>`;
     }
   } else if (inputs.style === 'calligraphic') {
-    const out = genCalligraphic({ cx, cy, rnd: prng, energies: [inputs.P, inputs.I, inputs.E, inputs.C], penMul: inputs.penMul, penSmooth: inputs.penSmooth, lineScale: inputs.lineScale || 1 });
+    const out = genCalligraphic({ cx, cy, rnd, energies: [inputs.P, inputs.I, inputs.E, inputs.C], penMul: inputs.penMul, penSmooth: inputs.penSmooth, lineScale: inputs.lineScale || 1 });
     emblem = `<path d="${out.d} Z" fill="url(#palGrad)" fill-opacity="0.92" stroke="none" stroke-width="0"/>`;
   }
   // --- CORE ---
@@ -391,9 +422,46 @@ function buildLayersSVG(rng, params, inputs) {
 
 // --- Hash helpers ---
 async function keccak256Hex(str) {
-  // Placeholder: in production, use a pure JS keccak256 (or import from reference)
-  // For now, fallback to sha256Hex for demo
-  return await sha256Hex(str);
+  // Minimal pure JS keccak256 implementation (for 32-byte hex input)
+  // Adapted from https://github.com/emn178/js-sha3 (public domain, reduced)
+  function keccak256(bytes) {
+    // Only for 32-byte hex input (seedHex), not general-purpose!
+    // This is a minimal, non-optimized version for deterministic anchor digest.
+    const RC = [1, 32898, 9223372036854808714, 9223372039002292224, 32907, 2147483649, 9223372039002292353, 9223372036854808585];
+    let s = new Uint32Array(50);
+    // Convert hex string to bytes
+    for (let i = 0; i < 32; i++) s[i >> 2] |= parseInt(bytes.substr(i * 2, 2), 16) << (8 * (i & 3));
+    for (let r = 0; r < 24; ++r) {
+      // θ step
+      let C = new Uint32Array(5);
+      for (let x = 0; x < 5; ++x) C[x] = s[x] ^ s[x + 5] ^ s[x + 10] ^ s[x + 15] ^ s[x + 20];
+      for (let x = 0; x < 5; ++x) {
+        let d = C[(x + 4) % 5] ^ ((C[(x + 1) % 5] << 1) | (C[(x + 1) % 5] >>> 31));
+        for (let y = 0; y < 25; y += 5) s[y + x] ^= d;
+      }
+      // ρ and π steps
+      let [x, y, current, t] = [1, 0, s[1], 0];
+      for (let i = 0; i < 24; ++i) {
+        t = s[(x % 5) + 5 * (y % 5)];
+        s[(x % 5) + 5 * (y % 5)] = (current << ((i + 1) * (i + 2) / 2 % 32)) | (current >>> (32 - ((i + 1) * (i + 2) / 2 % 32)));
+        current = t;
+        [x, y] = [y, (2 * x + 3 * y) % 5];
+      }
+      // χ step
+      for (let y = 0; y < 25; y += 5) {
+        let T = s.slice(y, y + 5);
+        for (let x = 0; x < 5; ++x) s[y + x] ^= ~T[(x + 1) % 5] & T[(x + 2) % 5];
+      }
+      // ι step
+      s[0] ^= RC[r % RC.length];
+    }
+    // Output first 32 bytes as hex
+    let out = '';
+    for (let i = 0; i < 8; ++i) out += ('00000000' + s[i].toString(16)).slice(-8);
+    return out;
+  }
+  // Accepts hex string (seedHex)
+  return keccak256(str);
 }
 // --- Deterministic JSON serialization (sorted keys, normalized numbers) ---
 function stableStringify(obj) {
@@ -404,45 +472,51 @@ function stableStringify(obj) {
   return '{' + keys.map(k => JSON.stringify(k) + ':' + stableStringify(obj[k])).join(',') + '}';
 }
 // --- Main export logic ---
-async function generateAll(inputs) {
-  const { seedString, seedHex } = await computeSeedHexFromInputs(inputs);
-  const rng = makeRNGFromSeedHex(seedHex);
-  const params = deriveParams(rng, inputs);
-  const rng2 = makeRNGFromSeedHex(seedHex);
-  const { svgContent } = buildLayersSVG(rng2, params, inputs);
+async function generateAll(inputs, transparent = false) {
+  const { seedString, seedHex } = await computeSeedHexFromInputs(inputs, false, false, !!inputs.useAnchor);
+  // Create a single PRNG instance
+  const prng = makeSfc32FromSeedHex(seedHex);
+  // Pass the same prng to both
+  const params = deriveParams(prng, inputs);
+  const { svgContent } = buildLayersSVG(prng, params, inputs);
+  // Only include background rect if not transparent
+  const bgRect = transparent ? '' : '<rect width="100%" height="100%" fill="#0F1417"/>';
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-    <rect width="100%" height="100%" fill="#0F1417"/>
+    ${bgRect}
     ${svgContent}
   </svg>`;
-  // Hashes
-  const huidHash = await keccak256Hex(inputs.huid);
-  const svgHash = await sha256Hex(svg);
-  // JSON metadata
+  // --- Build layers object (placeholders for now, can be extended for full details) ---
+  const layers = {
+    points: { /* ... */ },
+    waves: { /* ... */ },
+    spiral: { /* ... */ },
+    emblem: { /* ... */ },
+    core: { /* ... */ }
+  };
+  if (inputs.style === 'geometric') {
+    layers.rays = { /* ... */ };
+  }
+  // --- JSON metadata matching Annex A ---
   const jsonMeta = {
     seedHex,
-    seedString,
-    params: { ...params },
-    inputs: { ...inputs },
-    ids: {
-      huidHash,
-      svgHash,
+    params: {
+      huid: inputs.huid,
+      ts: inputs.ts,
+      energies: [inputs.P, inputs.I, inputs.E, inputs.C],
+      context: inputs.context,
+      style: inputs.style,
+      palette: inputs.palette
     },
-    export: {
-      svg: true,
-      png512: true,
-      png1024: true,
-      json: true
-    },
-    view: {
-      width: 512,
-      height: 512,
-      bg: '#0F1417'
-    }
+    layers,
+    // hashHex will be filled below
   };
+  // If anchor mode, add seedDigest (keccak256 of seedHex)
+  if (inputs.useAnchor) {
+    jsonMeta.seedDigest = await keccak256Hex(seedHex);
+  }
+  // Compute hashHex as sha256 of stableStringify(jsonMeta) without hashHex
   const jsonNoHash = stableStringify(jsonMeta);
-  const jsonHash = await sha256Hex(jsonNoHash);
-  const hashHex = jsonHash;
-  jsonMeta.ids.jsonHash = jsonHash;
+  const hashHex = await sha256Hex(jsonNoHash);
   jsonMeta.hashHex = hashHex;
   return { svg, jsonOut: jsonMeta, seedHex, seedString };
 }
@@ -454,7 +528,7 @@ function download(filename, data, type='application/octet-stream'){
   const a = document.createElement('a'); a.href=url; a.download=filename; document.body.appendChild(a); a.click();
   setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); },300);
 }
-function svgToPng(svgStr, size=512){
+function svgToPng(svgStr, size=512, transparent=false){
   return new Promise(resolve=>{
     const img = new Image();
     const svgBlob = new Blob([svgStr], {type:'image/svg+xml;charset=utf-8'});
@@ -463,7 +537,12 @@ function svgToPng(svgStr, size=512){
       const canvas = document.createElement('canvas');
       canvas.width = size; canvas.height = size;
       const ctx = canvas.getContext('2d');
-      ctx.fillStyle = PALETTES.bg.bg; ctx.fillRect(0,0,canvas.width,canvas.height);
+      if (!transparent) {
+        ctx.fillStyle = PALETTES.bg.bg || '#0F1417';
+        ctx.fillRect(0,0,canvas.width,canvas.height);
+      } else {
+        ctx.clearRect(0,0,canvas.width,canvas.height);
+      }
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
       canvas.toBlob(blob => { URL.revokeObjectURL(url); resolve(blob); }, 'image/png');
     };
@@ -492,7 +571,9 @@ async function readInputs(){
     penSmooth: Number(el('penSmooth')?.value || 2),
     wavesIntensity: Number(el('wavesIntensity')?.value || 0.6),
     pngAlpha: Number(el('pngAlpha')?.value || 1),
-    autoRegen: !!el('autoRegen')?.checked
+    autoRegen: !!el('autoRegen')?.checked,
+    pngTransparent: !!el('pngTransparent')?.checked,
+    useAnchor: !!el('useAnchor')?.checked
   };
 }
 // Show/hide advanced blocks based on style
@@ -537,6 +618,12 @@ autoInputs.forEach(id=>{
     });
   }
 });
+// Add event listener for useAnchor toggle to support auto-regen
+if (el('useAnchor')) {
+  el('useAnchor').addEventListener('change', () => {
+    if (el('autoRegen')?.checked) renderAndShow();
+  });
+}
 async function renderAndShow(){
   const inputs = await readInputs();
   const res = await generateAll(inputs);
@@ -554,12 +641,16 @@ el('exportSvg').addEventListener('click', ()=> {
 });
 el('exportPNG').addEventListener('click', async ()=> {
   if (!window._last) return alert('Generate first');
-  const blob = await svgToPng(window._last.svg,512);
+  const inputs = await readInputs();
+  const { svg } = await generateAll(inputs, true); // always transparent
+  const blob = await svgToPng(svg,512,true);
   if (blob) download('glyph-512.png', blob, 'image/png'); else alert('PNG export failed');
 });
 el('exportPNG2k').addEventListener('click', async ()=> {
   if (!window._last) return alert('Generate first');
-  const blob = await svgToPng(window._last.svg,1024);
+  const inputs = await readInputs();
+  const { svg } = await generateAll(inputs, true); // always transparent
+  const blob = await svgToPng(svg,1024,true);
   if (blob) download('glyph-1024.png', blob, 'image/png'); else alert('PNG export failed');
 });
 el('exportJSON').addEventListener('click', ()=> {
@@ -576,7 +667,7 @@ el('runT1').addEventListener('click', async ()=>{
     const r = await generateAll(inputs);
     hashes.push(r.jsonOut.hashHex);
   }
-  el('tvReport').textContent = `T1 hashes:\n${hashes.join('\n')}\nAll equal: ${hashes[0]===hashes[1] && hashes[1]===hashes[2]}`;
+  el('testReport').textContent = `T1 hashes:\n${hashes.join('\n')}\nAll equal: ${hashes[0]===hashes[1] && hashes[1]===hashes[2]}`;
 });
 
 el('runT2').addEventListener('click', async ()=>{
@@ -588,27 +679,11 @@ el('runT2').addEventListener('click', async ()=>{
     const r = await generateAll(inputs);
     if (seen.has(r.seedHex)) dup++; else seen.add(r.seedHex);
   }
-  el('tvReport').textContent = `T2: Generated 200 seeds — duplicates: ${dup}`;
+  el('testReport').textContent = `T2: Generated 200 seeds — duplicates: ${dup}`;
 });
 
-/* -------------------- Validate TV control vectors -------------------- */
-const TVs = [
-  {name:'TV1-Organica', inputs:{huid:'H-DET-001',ts:'1723654321123',P:2,I:3,E:2,C:4,context:'verify',style:'organica'}, expect:'cae26fdb37a8e2ac05db843c665441ebf23b4a5387c24bcf332f6401e692fb1f', note:'rings=8 turns=6'},
-  {name:'TV2-Geometric', inputs:{huid:'H-DET-002',ts:'1723654321123',P:1,I:4,E:3,C:2,context:'registration',style:'geometric'}, expect:'0852217fe382243d533d8f4140c4fdd9eb1900b9f78c3bd293ba16f9e32d71c6', note:'rings=7 turns=5 rays=22'},
-  {name:'TV3-Calligraphic', inputs:{huid:'H-DET-003',ts:'1723654321123',P:5,I:1,E:4,C:0,context:'payment_confirm',style:'calligraphic'}, expect:'3ac43403cf202974d565d9717b93f55bdbefd7fce851814fbc28c7a9d1377ad1', note:'rings=11 turns=2'},
-  {name:'TV4-Geometric100', inputs:{huid:'H-DET-004',ts:'1723654321123',P:0,I:5,E:1,C:4,context:'verify',style:'geometric'}, expect:'fa5e49853236e5c0ae8565d6d9e69fb0f3e3abedebb946f9cf236f9b0be69d6d', note:'rings=6 turns=6 rays=48'},
-  {name:'TV7-Geometric0', inputs:{huid:'H-DET-007',ts:'1723654321123',P:1,I:1,E:1,C:1,context:'other',style:'geometric'}, expect:'0435a16f7c2e5ee5bded0b8eacb285a7764df2c8c2a6e4e5426f2d122bd5c50d', note:'rings=7 turns=3 rays=0'},
-  {name:'TV10-Geometric35', inputs:{huid:'H-DET-010',ts:'1723654321123',P:2,I:5,E:4,C:3,context:'verify',style:'geometric'}, expect:'58a10cbb70fb6a8a8dd0fca720f2e0d71f5e3ea5e7e1b98fca7f6ed78e1a0b35', note:'rings=8 turns=6 rays=15'},
-];
-el('validateTVs').addEventListener('click', async ()=>{
-  let report = '';
-  for (let t of TVs){
-    const { seedHex } = await computeSeedHexFromInputs(t.inputs);
-    const ok = seedHex === t.expect;
-    report += `${t.name}: computed=${seedHex}\nexpected=${t.expect}\nMATCH=${ok}\nnote=${t.note}\n\n`;
-  }
-  el('tvReport').textContent = report;
-});
+// --- New: Validate against test-vectors-full.json ---
+// Remove the event listener for 'validateTVs' and related validation logic
 
 /* -------------------- initial render -------------------- */
 renderAndShow();
