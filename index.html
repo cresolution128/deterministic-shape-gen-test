@@ -21,6 +21,14 @@
 </head>
 <body>
   <h2>Deterministic Glyph Generator</h2>
+  <div style="margin-bottom:16px;">
+    <label for="roleSelect" style="font-weight:bold;">Role:</label>
+    <select id="roleSelect" style="margin-left:8px;width:auto;min-width:160px;display:inline-block;">
+      <option value="participant">Participant</option>
+      <option value="admin">Admin</option>
+      <option value="superadmin">Super-admin</option>
+    </select>
+  </div>
   <div class="wrap">
     <div class="card">
       <div><small>Inputs (seed string will be SHA-256("HUID|ts|P,I,E,C|context|style|v12"))</small></div>
@@ -128,6 +136,49 @@
         </div>
       </div>
 
+      <div style="margin-top:12px;padding:8px 0 0 0;border-top:1px solid #223344;" class="superadmin-block">
+        <div style="font-size:13px;color:#9fb0c8;margin-bottom:6px;font-weight:bold;">Super-admin — Palette & Presets (stub)</div>
+        <label style="display:flex;align-items:center;gap:8px;">
+          <span style="width:90px;">Preset</span>
+          <select id="presetSelect" style="flex:1;">
+            <option value="default">default</option>
+          </select>
+        </label>
+        <div class="row" style="margin-top:8px;">
+          <button id="presetSave">Save Preset</button>
+          <button id="presetDelete">Delete Preset</button>
+        </div>
+      </div>
+
+      <div style="margin-top:12px;padding:8px 0 0 0;border-top:1px solid #223344;" class="superadmin-block">
+        <div style="font-size:13px;color:#9fb0c8;margin-bottom:6px;font-weight:bold;">Super-admin — Anchoring Controls (stub)</div>
+        <label style="display:flex;align-items:center;gap:8px;">
+          <span style="width:90px;">Network</span>
+          <select id="anchorNetwork" style="flex:1;">
+            <option value="base">Base</option>
+            <option value="arbitrum">Arbitrum</option>
+            <option value="optimism">Optimism</option>
+            <option value="polygon">Polygon</option>
+          </select>
+        </label>
+        <div class="row" style="margin-top:8px;">
+          <button id="anchorNow">Anchor on chain</button>
+        </div>
+        <label style="margin-top:8px;">Tx Hash <input id="anchorTxHash" placeholder="0x..."/></label>
+      </div>
+
+      <div style="margin-top:12px;padding:8px 0 0 0;border-top:1px solid #223344;" class="superadmin-block">
+        <div style="font-size:13px;color:#9fb0c8;margin-bottom:6px;font-weight:bold;">Super-admin — Bulk Export (stub)</div>
+        <label>HUIDs (one per line)
+          <textarea id="bulkHuids" rows="4" style="width:100%;"></textarea>
+        </label>
+        <div class="row" style="margin-top:8px;">
+          <button id="bulkExportSvg">Bulk SVG</button>
+          <button id="bulkExportPng">Bulk PNG</button>
+          <button id="bulkExportJson">Bulk JSON</button>
+        </div>
+      </div>
+
       <div style="margin-top:8px" class="row">
         <button id="gen" style="border-color: white; border-width: 1px; border-style: solid;">Generate</button>
         <button id="exportSvg">Export SVG</button>
@@ -139,12 +190,19 @@
         <button id="exportJSON">Download JSON</button>
       </div>
 
-      <div style="margin-top:8px">
+      <div class="admin-only" style="margin-top:8px">
         <button id="runT1">Run T1 (Determinism)</button>
         <div class="muted" style="margin-bottom:2px;font-size:13px;padding:5px;">(Checks if running 3x with same inputs gives identical results (hashes).)</div>
         <button id="runT2">Run T2 (Uniqueness N=200)</button>
         <div class="muted" style="font-size:13px;padding:5px;">(Checks if 200 runs with different timestamps produce unique seeds (no duplicates).)</div>
         <pre id="testReport">-</pre>
+        <div style="margin-top:8px;">
+          <button id="verifyJson">Verify JSON (Admin)</button>
+        </div>
+        <div style="margin-top:8px;">
+          <div class="muted">Logs</div>
+          <pre id="logPanel" style="max-height:180px;overflow:auto;">-</pre>
+        </div>
       </div>
 
       <div style="margin-top:10px">

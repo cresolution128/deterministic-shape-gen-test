@@ -300,22 +300,46 @@ function genCalligraphic({cx, cy, rnd, energies, penMul, penSmooth, lineScale}) 
   const [P, I, E, C] = energies;
   const R0 = 105 + I * 5, a1 = 0.14 + E * 0.02, a2 = 0.10 + C * 0.02;
   const k1 = 2 + Math.floor(rnd() * 3), k2 = 5 + Math.floor(rnd() * 3);
-  const p1 = rnd() * Math.PI * 2, p2 = rnd() * Math.PI * 2, N = 80 + P * 10, ctr = [];
+  // Increase sampling a bit for smoother outline, especially at high C
+  const N = 100 + P * 12 + C * 6;
+  const p1 = rnd() * Math.PI * 2, p2 = rnd() * Math.PI * 2, ctr = [];
   for (let i = 0; i < N; i++) {
     const t = i / (N - 1), th = t * Math.PI * 2;
     const r = R0 * (1 + a1 * Math.sin(k1 * th + p1) + a2 * Math.sin(k2 * th + p2));
     ctr.push({ x: cx + r * Math.cos(th), y: cy + r * Math.sin(th) });
   }
-  const base = (2.0 + E * 0.8) * (penMul || 1.6) * (lineScale || 1), varA = 0.6 + C * 0.25, varK = 3 + Math.floor(rnd() * 4);
+  // Clamp lineScale for calligraphic to avoid extremes
+  const clampedLineScale = clamp(lineScale || 1, 0.8, 1.5);
+  const base = (2.0 + E * 0.8) * (penMul || 1.6) * clampedLineScale;
+  // Map C to modulation amplitude gently (keeps high C expressive but stable)
+  const c01 = clamp(C / 5, 0, 1);
+  const varA = 0.35 + 0.4 * c01; // previously larger; now softer response to C
+  const varK = 3 + Math.floor(rnd() * 3); // slightly lower variation to avoid rapid oscillations
   const left = [], right = [];
+  // Adaptive smoothing of width: stronger smoothing when C is high
+  const mixRaw = 0.25 + (1 - c01) * 0.25; // 0.5 at low C, 0.25 at high C
+  let lastW = base;
   for (let i = 0; i < ctr.length; i++) {
-    const p = ctr[i], q = ctr[(i + 1) % ctr.length], dx = q.x - p.x, dy = q.y - p.y, len = Math.max(1e-6, Math.hypot(dx, dy));
-    const nx = -dy / len, ny = dx / len, t = i / (ctr.length - 1), w = base * (1 + varA * Math.sin(varK * t * Math.PI * 2));
+    const p = ctr[i], q = ctr[(i + 1) % ctr.length];
+    const dx = q.x - p.x, dy = q.y - p.y;
+    const segLen = Math.max(1e-6, Math.hypot(dx, dy));
+    const nx = -dy / segLen, ny = dx / segLen;
+    const t = i / (ctr.length - 1);
+    // Raw width modulation
+    let wRaw = base * (1 + varA * Math.sin(varK * t * Math.PI * 2));
+    // Damp modulation on very short segments to avoid spikes around sharp corners
+    const damp = clamp(segLen / (segLen + 3.0), 0.2, 1.0);
+    wRaw = base + (wRaw - base) * damp;
+    // Low-pass filter width transitions (adaptive to C)
+    const w = lastW * (1 - mixRaw) + wRaw * mixRaw;
+    lastW = w;
     left.push({ x: p.x + nx * w, y: p.y + ny * w });
     right.push({ x: p.x - nx * w, y: p.y - ny * w });
   }
   let rib = left.concat(right.reverse());
-  if (penSmooth > 0) rib = chaikin(rib, Math.max(0, Math.min(3, penSmooth | 0)));
+  // Increase smoothing iters slightly with C
+  const smoothIters = Math.max(0, Math.min(3, (penSmooth|0) + (c01 > 0.6 ? 1 : 0)));
+  if (smoothIters > 0) rib = chaikin(rib, smoothIters);
   let d = `M ${rib[0].x.toFixed(2)} ${rib[0].y.toFixed(2)}`;
   for (let i = 1; i < rib.length; i++) d += ` L ${rib[i].x.toFixed(2)} ${rib[i].y.toFixed(2)}`;
   d += ' Z';
@@ -363,12 +387,13 @@ function buildLayersSVG(rnd, params, inputs) {
   defs += `</defs>`;
   // --- DOTS ---
   const dotTones = inputs.palette === 'olo' ? ['#0D221B','#2B7E75','#E4D6B0'] : [palette.light, palette.main, palette.shade];
-  const dotsCount = Math.min(400, Math.floor((inputs.pointsDensity||params.pointsDensity)/1.5));
+  const dotsCountTarget = Math.min(400, Math.floor((inputs.pointsDensity||params.pointsDensity)/1.5));
   const minDist = 13;
   let placed = [];
   let dots = '';
   let attempts = 0;
-  while (placed.length < dotsCount && attempts < dotsCount*20) {
+  let minR = Infinity, maxR = 0;
+  while (placed.length < dotsCountTarget && attempts < dotsCountTarget*20) {
     attempts++;
     const x = rnd() * W;
     const y = rnd() * H;
@@ -382,22 +407,34 @@ function buildLayersSVG(rnd, params, inputs) {
     if (!ok) continue;
     const tone = dotTones[placed.length % dotTones.length];
     const r = Math.max(0.8, rnd() * 1.2);
+    minR = Math.min(minR, r);
+    maxR = Math.max(maxR, r);
     dots += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r.toFixed(2)}" fill="${tone}" fill-opacity="1"/>`;
     placed.push([x,y]);
   }
-  dots = `<g opacity="1">${dots}</g>`;
+  const dotsGroup = `<g opacity="1">${dots}</g>`;
+  const layersMeta_points = {
+    tones: dotTones,
+    count: placed.length,
+    minSep: minDist,
+    rRange: [Number(minR.toFixed(2)), Number(maxR.toFixed(2))]
+  };
+
   // --- SPIRAL/COIL (reference logic) ---
   const spiralPath = renderSpiralVarWidth({ cx, cy, rnd, energies: [inputs.P, inputs.I, inputs.E, inputs.C], intensity: inputs.wavesIntensity || 0.6 });
   const spiral = `<path d="${spiralPath}" fill="#8fb4ff" fill-opacity="0.12" stroke="none"/>`;
+  const layersMeta_spiral = { turns: 2 + Math.round(((inputs.I||0) + (inputs.C||0)) / 2), steps: 260 + (inputs.P||0) * 40 };
+
   // --- EMBLEM & RAYS LAYER (reference logic) ---
   let emblem = '';
   let raysGroup = '';
   let shadow = '';
+  let layersMeta_emblem = { style: inputs.style, lineScale: inputs.lineScale||1 };
+  let layersMeta_rays = undefined;
   if (inputs.style === 'organica') {
     const out = genOrganica({ cx, cy, rnd, energies: [inputs.P, inputs.I, inputs.E, inputs.C], lineScale: inputs.lineScale || 1 });
     shadow = `<path d="${out.d} Z" fill="none" stroke="#fff" stroke-width="${(4.5 * (inputs.lineScale || 1)).toFixed(2)}" opacity="0.08"/>`;
     emblem = `<path d="${out.d} Z" fill="none" stroke="${palette.main}" stroke-width="${(2.8 * (inputs.lineScale || 1)).toFixed(2)}" opacity="0.93"/>`;
-    emblem += `<circle cx="${cx}" cy="${cy}" r="${out.core.r}" stroke="${palette.main}" stroke-opacity="0.7" stroke-width="1" fill="none"/>`;
   } else if (inputs.style === 'geometric') {
     const out = genGeometric({ cx, cy, rnd, energies: [inputs.P, inputs.I, inputs.E, inputs.C], raysLevel: inputs.raysLevel || 40, lineScale: inputs.lineScale || 1 });
     shadow = `<path d="${out.d} Z" fill="none" stroke="#fff" stroke-width="${(4.5 * (inputs.lineScale || 1)).toFixed(2)}" opacity="0.08"/>`;
@@ -407,17 +444,20 @@ function buildLayersSVG(rnd, params, inputs) {
         raysGroup += `<line x1="${r.x1}" y1="${r.y1}" x2="${r.x2}" y2="${r.y2}" stroke="${ACCENT}" stroke-width="${r.w}" opacity="0.35"/>`;
       }
       raysGroup = `<g>${raysGroup}</g>`;
+      layersMeta_rays = { count: out.rays.count };
     }
   } else if (inputs.style === 'calligraphic') {
     const out = genCalligraphic({ cx, cy, rnd, energies: [inputs.P, inputs.I, inputs.E, inputs.C], penMul: inputs.penMul, penSmooth: inputs.penSmooth, lineScale: inputs.lineScale || 1 });
     emblem = `<path d="${out.d} Z" fill="url(#palGrad)" fill-opacity="0.92" stroke="none" stroke-width="0"/>`;
+    layersMeta_emblem.calligraphic = { penMul: inputs.penMul, penSmooth: inputs.penSmooth };
   }
   // --- CORE ---
   let core = `<circle cx="${cx}" cy="${cy}" r="12" fill="none" stroke="${palette.main}" stroke-opacity="0.7" stroke-width="1.8"/>`;
   core += `<circle cx="${cx}" cy="${cy}" r="6" fill="${ACCENT}" fill-opacity="0.18"/>`;
+  const layersMeta_core = { rOuter: 12, rInner: 6, color: palette.main };
   // --- GROUPS & ORDER ---
-  let svgContent = `${defs}${dots}${spiral}${raysGroup}${shadow}${emblem}${core}`;
-  return { svgContent };
+  let svgContent = `${defs}${dotsGroup}${spiral}${raysGroup}${shadow}${emblem}${core}`;
+  return { svgContent, layersMeta: { points: layersMeta_points, spiral: layersMeta_spiral, emblem: layersMeta_emblem, core: layersMeta_core, ...(layersMeta_rays?{rays:layersMeta_rays}:{}) } };
 }
 
 // --- Hash helpers ---
@@ -478,25 +518,17 @@ async function generateAll(inputs, transparent = false) {
   const prng = makeSfc32FromSeedHex(seedHex);
   // Pass the same prng to both
   const params = deriveParams(prng, inputs);
-  const { svgContent } = buildLayersSVG(prng, params, inputs);
+  const built = buildLayersSVG(prng, params, inputs);
+  const { svgContent } = built;
   // Only include background rect if not transparent
   const bgRect = transparent ? '' : '<rect width="100%" height="100%" fill="#0F1417"/>';
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
     ${bgRect}
     ${svgContent}
   </svg>`;
-  // --- Build layers object (placeholders for now, can be extended for full details) ---
-  const layers = {
-    points: { /* ... */ },
-    waves: { /* ... */ },
-    spiral: { /* ... */ },
-    emblem: { /* ... */ },
-    core: { /* ... */ }
-  };
-  if (inputs.style === 'geometric') {
-    layers.rays = { /* ... */ };
-  }
-  // --- JSON metadata matching Annex A ---
+  // --- Build layers object ---
+  const layers = built.layersMeta;
+  // --- JSON metadata ---
   const jsonMeta = {
     seedHex,
     params: {
@@ -507,17 +539,40 @@ async function generateAll(inputs, transparent = false) {
       style: inputs.style,
       palette: inputs.palette
     },
-    layers,
-    // hashHex will be filled below
+    layers
   };
   // If anchor mode, add seedDigest (keccak256 of seedHex)
   if (inputs.useAnchor) {
     jsonMeta.seedDigest = await keccak256Hex(seedHex);
   }
-  // Compute hashHex as sha256 of stableStringify(jsonMeta) without hashHex
+  // ids
+  const huidHash = await keccak256Hex(inputs.huid||'');
+  const svgHash = await sha256Hex(svg);
+  // hashHex / jsonHash
   const jsonNoHash = stableStringify(jsonMeta);
-  const hashHex = await sha256Hex(jsonNoHash);
-  jsonMeta.hashHex = hashHex;
+  const jsonHash = await sha256Hex(jsonNoHash);
+  jsonMeta.ids = { huidHash: '0x'+huidHash, svgHash, jsonHash };
+  // export block
+  const seedShort = seedHex.slice(0,8);
+  jsonMeta.export = {
+    svgBytes: byteLengthUtf8(svg),
+    png512Bytes: 0,
+    png1024Bytes: 0,
+    fileNames: {
+      svg: `glyph_${seedShort}.svg`,
+      png512: `glyph_${seedShort}_512.png`,
+      png1024: `glyph_${seedShort}_1024.png`,
+      json: `glyph_${seedShort}.json`
+    }
+  };
+  // view block
+  jsonMeta.view = {
+    viewBox: '0 0 512 512',
+    background: transparent ? 'transparent' : '#0F1417',
+    paletteResolved: { main: palette.main, pale: palette.light, accent: palette.shade }
+  };
+  // top-level hashHex
+  jsonMeta.hashHex = jsonHash;
   return { svg, jsonOut: jsonMeta, seedHex, seedString };
 }
 
@@ -624,6 +679,26 @@ if (el('useAnchor')) {
     if (el('autoRegen')?.checked) renderAndShow();
   });
 }
+function updateRoleUI() {
+  const role = el('roleSelect')?.value || 'participant';
+  const adminBlock = document.querySelector('.admin-only');
+  const superBlocks = document.querySelectorAll('.superadmin-block');
+
+  if (role === 'participant') {
+    if (adminBlock) adminBlock.style.display = 'none';
+    superBlocks.forEach(b => b.style.display = 'none');
+  } else if (role === 'admin') {
+    if (adminBlock) adminBlock.style.display = '';
+    superBlocks.forEach(b => b.style.display = 'none');
+  } else if (role === 'superadmin') {
+    if (adminBlock) adminBlock.style.display = '';
+    superBlocks.forEach(b => b.style.display = '');
+  }
+}
+if (el('roleSelect')) {
+  el('roleSelect').addEventListener('change', updateRoleUI);
+  updateRoleUI();
+}
 async function renderAndShow(){
   const inputs = await readInputs();
   const res = await generateAll(inputs);
@@ -687,3 +762,48 @@ el('runT2').addEventListener('click', async ()=>{
 
 /* -------------------- initial render -------------------- */
 renderAndShow();
+
+// Expose a clean API for integration
+window.generateGlyph = async function(inputs, transparent = false) {
+  // Accepts: { huid, ts, P, I, E, C, context, style, palette, ... }
+  // Returns: { seedHex, svg, json, hashHex, seedString }
+  const res = await generateAll(inputs, transparent);
+  return {
+    seedHex: res.seedHex,
+    svg: res.svg,
+    json: res.jsonOut,
+    hashHex: res.jsonOut.hashHex,
+    seedString: res.seedString
+  };
+};
+
+function log(msg){
+  const lp = el('logPanel');
+  if (!lp) return;
+  const now = new Date().toISOString().slice(11,19);
+  lp.textContent = (lp.textContent && lp.textContent !== '-' ? lp.textContent + '\n' : '') + `[${now}] ${msg}`;
+}
+if (el('verifyJson')) {
+  el('verifyJson').addEventListener('click', async ()=>{
+    if (!window._last) { alert('Generate first'); return; }
+    try {
+      // Recompute canonical JSON string without hashHex
+      const jsonMeta = Object.assign({}, window._last.jsonOut);
+      const existingHash = jsonMeta.hashHex;
+      delete jsonMeta.hashHex;
+      const jsonNoHash = stableStringify(jsonMeta);
+      const recomputed = await sha256Hex(jsonNoHash);
+      const ok = recomputed === existingHash;
+      log(`verifyJson: ${ok ? 'PASS' : 'FAIL'} (expected ${existingHash}, got ${recomputed})`);
+      if (!ok) alert('JSON verification FAILED');
+    } catch(e){
+      log('verifyJson error: ' + e);
+      alert('Verification error: ' + e);
+    }
+  });
+}
+
+function byteLengthUtf8(str){
+  if (typeof TextEncoder !== 'undefined') return new TextEncoder().encode(str).length;
+  return unescape(encodeURIComponent(str)).length;
+}
